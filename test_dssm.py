@@ -185,4 +185,64 @@ if __name__ == '__main__':
     
     # 训练 继承base_tower
     model.fit(train_model_input, train[target].values, batch_size=256, epochs=10, verbose=2, validation_split=0.2)
+    
+    
+    # %%
+    # 5.preprocess the test data
+    test = pd.merge(test, train[['movie_id', 'item_mean_rating']].drop_duplicates(), on='movie_id', how='left').fillna(
+        0.5)
+    test = pd.merge(test, train[['user_id', 'user_mean_rating']].drop_duplicates(), on='user_id', how='left').fillna(
+        0.5)
+    test = pd.merge(test, train[['user_id', 'user_hist']].drop_duplicates(), on='user_id', how='left').fillna('1')
+    test[dense_features] = mms.transform(test[dense_features])
+
+    test_genres_list = get_test_var_feature(test, 'genres', genres_key2index, genres_maxlen)
+    test_user_hist = get_test_var_feature(test, 'user_hist', user_key2index, user_maxlen)
+
+    test_model_input = {name: test[name] for name in sparse_features + dense_features}
+    test_model_input["genres"] = test_genres_list
+    test_model_input["user_hist"] = test_user_hist
+
+    # %%
+    # 6.Evaluate
+    eval_tr = model.evaluate(train_model_input, train[target].values)
+    print(eval_tr)
+
+    # %%
+    pred_ts = model.predict(test_model_input, batch_size=2000)
+    print("test LogLoss", round(log_loss(test[target].values, pred_ts), 4))
+    print("test AUC", round(roc_auc_score(test[target].values, pred_ts), 4))
+
+    # %%
+    # 7.Embedding
+    print("user embedding shape: ", model.user_dnn_embedding[:2])
+    print("item embedding shape: ", model.item_dnn_embedding[:2])
+
+    # %%
+    # 8. get single tower
+    dict_trained = model.state_dict()    # trained model 查看网络参数
+    trained_lst = list(dict_trained.keys())
+    
+    # user tower
+    model_user = DSSM(user_feature_columns, [], task='binary', device=device)
+    dict_user = model_user.state_dict()
+    for key in dict_user:
+        dict_user[key] = dict_trained[key]
+    model_user.load_state_dict(dict_user)    # load trained model parameters of user tower
+    user_feature_name = user_sparse_features + user_dense_features
+    user_model_input = {name: test[name] for name in user_feature_name}
+    user_model_input["user_hist"] = test_user_hist
+    user_embedding = model_user.predict(user_model_input, batch_size=2000)
+    print("single user embedding shape: ", user_embedding[:2])
+
+    # item tower
+    model_item = DSSM([], item_feature_columns, task='binary', device=device)
+    dict_item = model_item.state_dict()
+    for key in dict_item:
+        dict_item[key] = dict_trained[key]
+    model_item.load_state_dict(dict_item)  # load trained model parameters of item tower
+    item_feature_name = item_sparse_features + item_dense_features
+    item_model_input = {name: test[name] for name in item_feature_name}
+    item_model_input["genres"] = test_genres_list
+    item_embedding = model_item.predict(item_model_input, batch_size=2000)
                                                      
